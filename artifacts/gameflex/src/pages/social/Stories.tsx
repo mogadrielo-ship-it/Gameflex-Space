@@ -428,9 +428,13 @@ export default function Stories() {
     staleTime: 60_000,
     queryFn: async () => {
       try {
-        const { items } = await recommendationService.fetchRecommendations('stories', user?.id, 36);
-        const data = items.map((item: any) => item.payload);
-        const ids = [...new Set(data.map((s: any) => s.user_id))];
+          const { items } = await recommendationService.fetchRecommendations('stories', user?.id, 36);
+          const data = (items || []).map((item: any) => item.payload).filter(Boolean);
+          // If recommendations are empty, fall back to DB query below
+          if (!data.length) {
+            throw new Error('no-recommendations');
+          }
+          const ids = [...new Set(data.map((s: any) => s.user_id))];
         const { data: profiles } = await supabase
           .from('profiles')
           .select('user_id, username, avatar_url')
@@ -455,13 +459,26 @@ export default function Stories() {
             const bT = new Date(b.stories[b.stories.length - 1].created_at).getTime();
             return bT - aT;
           });
-      } catch {
+      } catch (err) {
+        // if recommendations failed or returned empty, fetch recent stories from DB
         const cutoff = subHours(new Date(), 24).toISOString();
-        const { data } = await supabase
-          .from('user_statuses')
-          .select('*')
-          .gte('created_at', cutoff)
-          .order('created_at', { ascending: true });
+        // Try user_stories first, fallback to user_statuses
+        let data = null;
+        try {
+          const res = await supabase
+            .from('user_stories')
+            .select('*')
+            .gte('created_at', cutoff)
+            .order('created_at', { ascending: true });
+          data = res.data;
+        } catch {
+          const res = await supabase
+            .from('user_statuses')
+            .select('*')
+            .gte('created_at', cutoff)
+            .order('created_at', { ascending: true });
+          data = res.data;
+        }
 
         if (!data?.length) return [];
 
@@ -502,14 +519,26 @@ export default function Stories() {
     queryFn: async () => {
       if (!user) return [];
       const cutoff = subHours(new Date(), 24).toISOString();
-      const { data, error } = await supabase
-        .from('user_statuses')
-        .select('id, user_id, content, media_url, media_type, created_at, likes_count, comments_count, views_count')
-        .eq('user_id', user.id)
-        .gte('created_at', cutoff)
-        .order('created_at', { ascending: false });
-      if (error) throw error;
-      return data ?? [];
+      // Prefer user_stories for personal stories
+      try {
+        const { data: d, error } = await supabase
+          .from('user_stories')
+          .select('id, user_id, content, media_url, media_type, created_at, likes_count, comments_count, views_count')
+          .eq('user_id', user.id)
+          .gte('created_at', cutoff)
+          .order('created_at', { ascending: false });
+        if (error) throw error;
+        return d ?? [];
+      } catch {
+        const { data: d2, error: err2 } = await supabase
+          .from('user_statuses')
+          .select('id, user_id, content, media_url, media_type, created_at, likes_count, comments_count, views_count')
+          .eq('user_id', user.id)
+          .gte('created_at', cutoff)
+          .order('created_at', { ascending: false });
+        if (err2) throw err2;
+        return d2 ?? [];
+      }
     },
   });
 
@@ -534,8 +563,15 @@ export default function Stories() {
   // ── delete ──
   const deleteMut = useMutation({
     mutationFn: async (id: string) => {
-      const { error } = await supabase.from('user_statuses').delete().eq('id', id);
-      if (error) throw error;
+      // Try deleting from user_stories first, otherwise remove from user_statuses
+      try {
+        const { error } = await supabase.from('user_stories').delete().eq('id', id);
+        if (error) throw error;
+        return;
+      } catch {
+        const { error } = await supabase.from('user_statuses').delete().eq('id', id);
+        if (error) throw error;
+      }
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['stories-grid'] });

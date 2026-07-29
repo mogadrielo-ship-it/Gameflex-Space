@@ -54,22 +54,22 @@ export default defineConfig({
     chunkSizeWarningLimit: 700,
     rollupOptions: {
       output: {
-        manualChunks: {
-          react: ['react', 'react-dom'],
-          router: ['@tanstack/react-router', 'wouter'],
-          query: ['@tanstack/react-query'],
-          ui: [
-            '@radix-ui/react-dialog',
-            '@radix-ui/react-dropdown-menu',
-            '@radix-ui/react-tooltip',
-            '@radix-ui/react-toast',
-            '@radix-ui/react-tabs',
-          ],
-          charts: ['recharts'],
-          forms: ['react-hook-form', '@hookform/resolvers', 'zod'],
-          icons: ['lucide-react', 'react-icons'],
-          supabase: ['@supabase/supabase-js'],
-          motion: ['framer-motion'],
+        manualChunks(id) {
+          if (!id) return null;
+          if (id.includes('node_modules')) {
+            if (id.includes('react-dom')) return 'vendor-react-dom';
+            if (id.includes('/react/')) return 'vendor-react';
+            if (id.includes('@tanstack')) return 'vendor-tanstack';
+            if (id.includes('recharts')) return 'vendor-charts';
+            if (id.includes('framer-motion')) return 'vendor-motion';
+            if (id.includes('@supabase')) return 'vendor-supabase';
+            if (id.includes('lucide-react') || id.includes('react-icons')) return 'vendor-icons';
+            return 'vendor';
+          }
+          if (id.includes('/src/pages') || id.includes('/src/routes')) {
+            return 'pages';
+          }
+          return null;
         },
       },
     },

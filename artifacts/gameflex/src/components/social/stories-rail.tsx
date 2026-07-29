@@ -14,7 +14,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { motion, AnimatePresence } from 'framer-motion';
 import { resolveStoryGradient, isVideoStory } from '@/features/stories/gradients';
 import { encryptMessage, decryptMessage } from '@/lib/encryption';
-import { updateStatusCount } from '@/lib/social-analytics';
+import { updateEntityCount } from '@/lib/social-analytics';
 
 // ─── emoji reactions ──────────────────────────────────────────────────────────
 
@@ -143,17 +143,21 @@ export function StoryViewer({
   useEffect(() => {
     if (!story?.id || viewedRef.current.has(story.id)) return;
     viewedRef.current.add(story.id);
-    void updateStatusCount(supabase, story.id, 'views_count', 1).then(() => {
-      qc.invalidateQueries({ queryKey: ['my-stories'] });
-      qc.invalidateQueries({ queryKey: ['stories-grid'] });
-      qc.invalidateQueries({ queryKey: ['stories-rail'] });
-      void recommendationEventService.recordEvent({
-        userId: user?.id ?? null,
-        entityType: 'story',
-        entityId: story.id,
-        action: 'story_view',
-      });
-    }).catch(() => {});
+    void import('@/lib/social-analytics').then(({ updateEntityCount }) =>
+      updateEntityCount(supabase, 'user_stories', story.id, 'views_count', 1)
+        .catch(() => updateEntityCount(supabase, 'user_statuses', story.id, 'views_count', 1))
+        .then(() => {
+          qc.invalidateQueries({ queryKey: ['my-stories'] });
+          qc.invalidateQueries({ queryKey: ['stories-grid'] });
+          qc.invalidateQueries({ queryKey: ['stories-rail'] });
+          void recommendationEventService.recordEvent({
+            userId: user?.id ?? null,
+            entityType: 'story',
+            entityId: story.id,
+            action: 'story_view',
+          });
+        })
+    );
   }, [story?.id]);
 
   // ── real-time subscription for current story's likes + comments ──
@@ -187,16 +191,16 @@ export function StoryViewer({
   const likeMut = useMutation({
     mutationFn: async () => {
       if (!user) throw new Error('Sign in to react');
-      if (storyLikes?.isLiked) {
+        if (storyLikes?.isLiked) {
         const { error } = await supabase.from('status_likes').delete()
           .eq('status_id', story.id).eq('user_id', user.id);
         if (error) throw error;
-        await updateStatusCount(supabase, story.id, 'likes_count', -1);
+        await updateEntityCount(supabase, 'user_stories', story.id, 'likes_count', -1).catch(() => updateEntityCount(supabase, 'user_statuses', story.id, 'likes_count', -1));
       } else {
         const { error } = await supabase.from('status_likes')
           .insert({ status_id: story.id, user_id: user.id });
         if (error) throw error;
-        await updateStatusCount(supabase, story.id, 'likes_count', 1);
+        await updateEntityCount(supabase, 'user_stories', story.id, 'likes_count', 1).catch(() => updateEntityCount(supabase, 'user_statuses', story.id, 'likes_count', 1));
       }
     },
     onSuccess: () => {
@@ -237,7 +241,7 @@ export function StoryViewer({
       };
       const { error } = await supabase.from('status_comments').insert(insertPayload);
       if (error) throw error;
-      await updateStatusCount(supabase, story.id, 'comments_count', 1);
+      await updateEntityCount(supabase, 'user_stories', story.id, 'comments_count', 1).catch(() => updateEntityCount(supabase, 'user_statuses', story.id, 'comments_count', 1));
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['story-comments', story?.id] });

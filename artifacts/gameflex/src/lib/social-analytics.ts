@@ -9,23 +9,53 @@ export async function updateStatusCount(
   field: 'likes_count' | 'comments_count' | 'views_count',
   delta: number,
 ) {
-  if (!statusId) return null;
+  return updateEntityCount(supabaseClient, 'user_statuses', statusId, field, delta);
+}
+
+export async function updateEntityCount(
+  supabaseClient: { from: (table: string) => any },
+  table: string,
+  id: string,
+  field: 'likes_count' | 'comments_count' | 'views_count',
+  delta: number,
+) {
+  if (!id) return null;
+
+  try {
+    const { data, error } = await supabaseClient
+      .from(table)
+      .select(field)
+      .eq('id', id)
+      .maybeSingle();
+
+    if (error) throw error;
+
+    const current = (data as Record<string, number | null> | null)?.[field] ?? 0;
+    const nextValue = applyCountDelta(current, delta);
+
+    const { error: updateError } = await supabaseClient
+      .from(table)
+      .update({ [field]: nextValue })
+      .eq('id', id);
+
+    if (!updateError) return nextValue;
+  } catch {
+    // try fallback
+  }
 
   try {
     const { data, error } = await supabaseClient
       .from('user_statuses')
       .select(field)
-      .eq('id', statusId)
+      .eq('id', id)
       .maybeSingle();
-
     if (error) throw error;
-
-    const nextValue = applyCountDelta((data as Record<string, number | null> | null)?.[field] ?? 0, delta);
+    const current = (data as Record<string, number | null> | null)?.[field] ?? 0;
+    const nextValue = applyCountDelta(current, delta);
     const { error: updateError } = await supabaseClient
       .from('user_statuses')
       .update({ [field]: nextValue })
-      .eq('id', statusId);
-
+      .eq('id', id);
     if (updateError) throw updateError;
     return nextValue;
   } catch {

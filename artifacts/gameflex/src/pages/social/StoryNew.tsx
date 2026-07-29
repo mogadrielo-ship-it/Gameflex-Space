@@ -139,13 +139,24 @@ export default function StoryNew() {
       if (mode === 'text') {
         const body = text.trim();
         if (!body) throw new Error('Write something for your story first.');
-        const { error } = await supabase.from('user_statuses').insert({
-          user_id: user.id,
-          content: body,
-          media_url: null,
-          media_type: encodeTextStoryType(gradientId),
-        });
-        if (error) throw error;
+        // Prefer inserting into a dedicated `user_stories` table if present.
+        try {
+          const { error } = await supabase.from('user_stories').insert({
+            user_id: user.id,
+            content: body,
+            media_url: null,
+            media_type: encodeTextStoryType(gradientId),
+          });
+          if (error) throw error;
+        } catch (e) {
+          const { error } = await supabase.from('user_statuses').insert({
+            user_id: user.id,
+            content: body,
+            media_url: null,
+            media_type: encodeTextStoryType(gradientId),
+          });
+          if (error) throw error;
+        }
         return;
       }
 
@@ -163,13 +174,23 @@ export default function StoryNew() {
         .from(STORAGE_BUCKETS.STATUS_MEDIA)
         .getPublicUrl(path);
 
-      const { error } = await supabase.from('user_statuses').insert({
-        user_id: user.id,
-        content: caption.trim() || null,
-        media_url: publicUrl,
-        media_type: kind,
-      });
-      if (error) throw error;
+      try {
+        const { error } = await supabase.from('user_stories').insert({
+          user_id: user.id,
+          content: caption.trim() || null,
+          media_url: publicUrl,
+          media_type: kind,
+        });
+        if (error) throw error;
+      } catch (e) {
+        const { error } = await supabase.from('user_statuses').insert({
+          user_id: user.id,
+          content: caption.trim() || null,
+          media_url: publicUrl,
+          media_type: kind,
+        });
+        if (error) throw error;
+      }
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['stories-grid'] });

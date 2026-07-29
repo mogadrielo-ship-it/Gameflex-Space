@@ -2,6 +2,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
+import { updateEntityCount } from '@/lib/social-analytics';
 import { useAuth } from '@/lib/auth-context';
 import { Link } from '@/lib/router-compat';
 import { recommendationService } from '@/services/recommendations/RecommendationService';
@@ -30,6 +31,7 @@ export default function Reels() {
   const [likedReelIds, setLikedReelIds] = useState<Set<string>>(new Set());
   const [savedReelIds, setSavedReelIds] = useState<Set<string>>(new Set());
   const containerRef = useRef<HTMLDivElement>(null);
+  const viewedReelIdsRef = useRef<Set<string>>(new Set());
 
   const { data: reels = [] } = useQuery({
     queryKey: ['reels', user?.id],
@@ -142,8 +144,13 @@ export default function Reels() {
         toast({ title: 'Comment posted', description: 'This feature is in beta.' });
       }
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['reel-comments', selectedReelId] });
+    onSuccess: (_data, vars) => {
+      const reelId = (vars as any)?.reelId ?? selectedReelId;
+      if (reelId) {
+        void updateEntityCount(supabase, 'user_statuses', reelId, 'comments_count', 1).catch(() => {});
+        queryClient.invalidateQueries({ queryKey: ['reel-comments', reelId] });
+        queryClient.invalidateQueries({ queryKey: ['reels'] });
+      }
       setCommentText('');
     },
   });
@@ -173,8 +180,14 @@ export default function Reels() {
       (entries) => {
         entries.forEach(entry => {
           const video = entry.target as HTMLVideoElement;
+          const reelId = video?.dataset?.reelId;
           if (entry.isIntersecting && entry.intersectionRatio >= 0.8) {
             video.play().catch(() => {});
+            if (reelId && !viewedReelIdsRef.current.has(reelId)) {
+              viewedReelIdsRef.current.add(reelId);
+              void updateEntityCount(supabase, 'user_statuses', reelId, 'views_count', 1).catch(() => {});
+              void recommendationEventService.recordEvent({ userId: user?.id ?? null, entityType: 'reel', entityId: reelId, action: 'view' });
+            }
           } else {
             video.pause();
           }
@@ -207,6 +220,8 @@ export default function Reels() {
           else next.add(reel.id);
           return next;
         });
+        // update persistent counts
+        void updateEntityCount(supabase, 'user_statuses', reel.id, 'likes_count', isLiked ? -1 : 1).catch(() => {});
         if (!isLiked) {
           void recommendationEventService.recordEvent({
             userId: user?.id ?? null,
@@ -215,6 +230,7 @@ export default function Reels() {
             action: 'like',
           });
         }
+        queryClient.invalidateQueries({ queryKey: ['reels'] });
       }
     });
   };
@@ -287,6 +303,7 @@ export default function Reels() {
               {/* Video */}
               <video
                 data-reel-video
+                data-reel-id={reel.id}
                 src={reel.media_url}
                 loop
                 muted={muted}

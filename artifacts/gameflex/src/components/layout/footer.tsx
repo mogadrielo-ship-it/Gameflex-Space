@@ -1,5 +1,7 @@
 import { Link } from '@/lib/router-compat';
 import { Trophy, Twitter, Instagram, Youtube, MessageCircle, Mail, Phone } from 'lucide-react';
+import { useState } from 'react';
+import { usePWA } from '@/lib/pwa';
 
 const footerLinks = {
   platform: [
@@ -30,6 +32,24 @@ const socialLinks = [
 ];
 
 export function Footer() {
+  const { deferredPrompt, promptInstall, isInstalled, isIos } = usePWA();
+  const [showIosGuide, setShowIosGuide] = useState(false);
+  const [showInstallHelp, setShowInstallHelp] = useState(false);
+
+  const handleInstallClick = async (e: React.MouseEvent) => {
+    e.preventDefault();
+    if (isIos) {
+      setShowIosGuide(true);
+      return;
+    }
+    if (deferredPrompt) {
+      await promptInstall();
+      return;
+    }
+    // No native prompt available — show short instructions
+    setShowInstallHelp(true);
+  };
+
   return (
     <footer className="bg-card border-t border-border/50">
       <div className="container mx-auto px-4 py-12">
@@ -59,6 +79,15 @@ export function Footer() {
                   <social.icon className="h-5 w-5" />
                 </a>
               ))}
+              {/* Install link: shown when app not installed */}
+              {!isInstalled && (
+                <button
+                  onClick={handleInstallClick}
+                  className="ml-2 px-3 py-2 rounded-md bg-primary text-primary-foreground text-xs font-semibold hover:bg-primary/90 transition-colors"
+                >
+                  Install GameFlex
+                </button>
+              )}
             </div>
           </div>
 
@@ -113,6 +142,32 @@ export function Footer() {
             </ul>
           </div>
         </div>
+
+        {/* iOS guide modal */}
+        {showIosGuide && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+            <div className="bg-card rounded-xl p-6 max-w-sm">
+              <h3 className="font-semibold mb-2">Add GameFlex to your Home Screen</h3>
+              <p className="text-sm text-muted-foreground mb-4">Tap the share button in Safari (the box with an arrow), then choose "Add to Home Screen" to install GameFlex.</p>
+              <div className="flex justify-end gap-2">
+                <button onClick={() => setShowIosGuide(false)} className="px-3 py-2 rounded bg-secondary/50">Close</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Install help modal for non-iOS when native prompt not available */}
+        {showInstallHelp && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+            <div className="bg-card rounded-xl p-6 max-w-sm">
+              <h3 className="font-semibold mb-2">Install GameFlex</h3>
+              <p className="text-sm text-muted-foreground mb-4">To install GameFlex on desktop or Android, open your browser menu and choose "Install" or click the install icon in the address bar. On Chrome for desktop, use the install option in the three-dot menu → "Install GameFlex".</p>
+              <div className="flex justify-end gap-2">
+                <button onClick={() => setShowInstallHelp(false)} className="px-3 py-2 rounded bg-secondary/50">Close</button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Contact Info */}
         <div className="mt-12 pt-8 border-t border-border/50">
