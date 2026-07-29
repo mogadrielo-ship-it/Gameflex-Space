@@ -1,4 +1,31 @@
+import { spawnSync } from 'node:child_process';
+import { mkdir, writeFile } from 'node:fs/promises';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import dotenv from 'dotenv';
+import { createClient } from '@supabase/supabase-js';
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const repoRoot = path.resolve(__dirname, '..');
+const envPath = path.resolve(repoRoot, 'artifacts/api-server/.env');
+
+dotenv.config({ path: envPath });
+
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY ?? process.env.SUPABASE_SECRET_KEY ?? process.env.SUPABASE_ANON_KEY;
+const DATABASE_URL = process.env.SUPABASE_DB_URL ?? process.env.DATABASE_URL;
+const BACKUP_PATH = path.resolve(repoRoot, 'artifacts/api-server/mybackup.json');
+const BOOTSTRAP_SQL_PATH = path.resolve(repoRoot, 'artifacts/api-server/supabase-bootstrap.sql');
+const SEED_SQL_PATH = path.resolve(repoRoot, 'artifacts/api-server/seed-supabase.sql');
+
+if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
+  console.error('Missing Supabase URL or service key. Set SUPABASE_URL and SUPABASE_SERVICE_KEY/SUPABASE_SECRET_KEY in artifacts/api-server/.env');
+  process.exit(1);
+}
+
+function buildBootstrapSql() {
+  return `
 create extension if not exists "uuid-ossp";
 
 create table if not exists public.profiles (
@@ -244,3 +271,101 @@ begin
     end if;
   end if;
 end $$;
+`;
+}
+
+async function writeBootstrapFiles() {
+  const sql = buildBootstrapSql();
+  await mkdir(path.dirname(BOOTSTRAP_SQL_PATH), { recursive: true });
+  await writeFile(BOOTSTRAP_SQL_PATH, sql, 'utf8');
+  await writeFile(SEED_SQL_PATH, sql, 'utf8');
+  console.log(`Wrote bootstrap SQL to ${path.relative(repoRoot, BOOTSTRAP_SQL_PATH)}`);
+}
+
+async function ensureStorageBuckets() {
+  const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY, {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+    },
+  });
+
+  const buckets = ['avatars', 'tournament-images', 'marketplace-images'];
+  for (const bucket of buckets) {
+    const response = await fetch(`${SUPABASE_URL}/storage/v1/bucket`, {
+      method: 'POST',
+      headers: {
+        apikey: SUPABASE_SERVICE_KEY,
+        Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ name: bucket, public: true }),
+    });
+
+    const text = await response.text();
+    if (response.ok) {
+      console.log(`Created storage bucket ${bucket}`);
+      continue;
+    }
+
+    if (response.status === 400 && text.includes('already exists')) {
+      console.log(`Storage bucket ${bucket} already exists`);
+      continue;
+    }
+
+    console.warn(`Could not create storage bucket ${bucket}: ${response.status} ${text}`);
+  }
+
+  return supabase;
+}
+
+async function applySql(sql) {
+  if (!DATABASE_URL) {
+    console.log('No database connection string found. The SQL bootstrap was written to artifacts/api-server/supabase-bootstrap.sql for manual execution.');
+    return false;
+  }
+
+  try {
+    const { Client } = await import('pg');
+    const client = new Client({
+      connectionString: DATABASE_URL,
+      ssl: { rejectUnauthorized: false },
+    });
+    await client.connect();
+    await client.query(sql);
+    await client.end();
+    console.log('Applied bootstrap SQL to the connected database.');
+    return true;
+  } catch (error) {
+    console.warn('Direct SQL application failed:', error instanceof Error ? error.message : error);
+    return false;
+  }
+}
+
+async function importBackup() {
+  const result = spawnSync(process.execPath, [path.join(__dirname, 'import-supabase-backup.mjs'), BACKUP_PATH, '--copy-storage'], {
+    cwd: repoRoot,
+    env: { ...process.env, SUPABASE_URL, SUPABASE_SERVICE_KEY, SUPABASE_SECRET_KEY: SUPABASE_SERVICE_KEY },
+    stdio: 'inherit',
+  });
+
+  if (result.status !== 0) {
+    console.warn('Backup import finished with a non-zero exit code. If the schema is not yet available, apply the SQL from artifacts/api-server/supabase-bootstrap.sql in the Supabase SQL editor.');
+  }
+}
+
+async function main() {
+  await writeBootstrapFiles();
+  await ensureStorageBuckets();
+  const applied = await applySql(buildBootstrapSql());
+  if (applied) {
+    await importBackup();
+  } else {
+    console.log('Skipping import because the database schema could not be applied automatically.');
+  }
+}
+
+main().catch((error) => {
+  console.error('Bootstrap failed:', error instanceof Error ? error.message : error);
+  process.exit(1);
+});

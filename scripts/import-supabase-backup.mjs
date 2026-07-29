@@ -83,6 +83,31 @@ async function collectStorageUrls(tables) {
   return Array.from(urls);
 }
 
+async function ensureBucket(bucketName) {
+  const response = await fetch(`${SUPABASE_URL}/storage/v1/bucket`, {
+    method: 'POST',
+    headers: {
+      apikey: SUPABASE_KEY,
+      Authorization: `Bearer ${SUPABASE_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ name: bucketName, public: true }),
+  });
+
+  if (response.ok) {
+    console.log(`Created storage bucket ${bucketName}`);
+    return true;
+  }
+
+  const text = await response.text();
+  if (response.status === 400 && text.includes('already exists')) {
+    return true;
+  }
+
+  console.warn(`Unable to ensure storage bucket ${bucketName}: ${response.status} ${text}`);
+  return false;
+}
+
 async function copyStorageAssets(oldBaseUrl, tables) {
   const urls = await collectStorageUrls(tables);
   if (!urls.length) {
@@ -92,6 +117,7 @@ async function copyStorageAssets(oldBaseUrl, tables) {
 
   console.log(`Found ${urls.length} storage asset URLs in backup; copying to ${SUPABASE_URL}`);
 
+  const bucketsSeen = new Set();
   for (const url of urls) {
     const storageObject = extractStorageObject(url);
     if (!storageObject) {
@@ -100,6 +126,11 @@ async function copyStorageAssets(oldBaseUrl, tables) {
     }
 
     const { bucket, objectPath } = storageObject;
+    if (!bucketsSeen.has(bucket)) {
+      await ensureBucket(bucket);
+      bucketsSeen.add(bucket);
+    }
+
     try {
       const response = await fetch(url);
       if (!response.ok) {
@@ -157,12 +188,18 @@ async function importTables(tables) {
 async function main() {
   const { backupFile, copyStorage, oldBaseUrl } = parseArgs(process.argv.slice(2));
 
-  if (!backupFile) {
+  const repoRoot = path.resolve(__dirname, '..');
+  const fallbackBackupFile = path.resolve(repoRoot, 'artifacts/api-server/mybackup.json');
+  const resolvedBackupFile = backupFile ?? fallbackBackupFile;
+
+  if (!resolvedBackupFile) {
     console.error('Usage: node import-supabase-backup.mjs <backup-file.json> [--copy-storage] [--old-base-url=https://old.supabase.co]');
     process.exit(1);
   }
 
-  const backupPath = path.resolve(process.cwd(), backupFile);
+  const backupPath = path.isAbsolute(resolvedBackupFile)
+    ? resolvedBackupFile
+    : path.resolve(repoRoot, resolvedBackupFile);
   console.log('Loading backup file:', backupPath);
 
   const backupText = await fs.readFile(backupPath, 'utf8');

@@ -6,11 +6,13 @@
   "scripts": {
     "hello": "tsx ./src/hello.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "import-supabase-backup": "node ./import-supabase-backup.mjs"
+    "import-supabase-backup": "node ./import-supabase-backup.mjs",
+    "bootstrap-supabase": "node ./bootstrap-supabase.mjs"
   },
   "devDependencies": {
     "@supabase/supabase-js": "2.110.8",
     "@types/node": "catalog:",
+    "pg": "^8.12.0",
     "tsx": "catalog:"
   }
 }
