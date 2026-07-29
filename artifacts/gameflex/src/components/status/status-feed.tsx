@@ -17,6 +17,7 @@ import { cn } from '@/lib/utils';
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { StatusComments } from '@/components/social/status-comments';
 import { useToast } from '@/hooks/use-toast';
+import { readSavedPosts, writeSavedPosts, updateStatusCount } from '@/lib/social-analytics';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   DropdownMenu,
@@ -230,6 +231,16 @@ export function StatusFeed({ mode = 'foryou' }: { mode?: 'foryou' | 'trending' |
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [likeAnimations, setLikeAnimations] = useState<Set<string>>(new Set());
 
+  useEffect(() => {
+    if (!user?.id) {
+      setSavedPosts(new Set());
+      return;
+    }
+
+    const hydrated = readSavedPosts(window.localStorage, user.id);
+    setSavedPosts(new Set(hydrated));
+  }, [user?.id]);
+
   // ── fetch ──
   const { data: rawStatuses = [], isLoading } = useQuery({
     queryKey: ['user-statuses', mode, user?.id ?? 'anon', trendingKey],
@@ -252,7 +263,10 @@ export function StatusFeed({ mode = 'foryou' }: { mode?: 'foryou' | 'trending' |
           const userSaves = savesRes.data?.map((s: any) => s.status_id) ?? [];
           const userFollows = followsRes.data?.map((f: any) => f.following_id) ?? [];
 
-          if (userSaves.length) setSavedPosts(new Set(userSaves));
+          if (user?.id) {
+            writeSavedPosts(window.localStorage, user.id, userSaves);
+            setSavedPosts(new Set(userSaves));
+          }
 
           return data.map((s: any) => ({
             ...s,
@@ -298,7 +312,10 @@ export function StatusFeed({ mode = 'foryou' }: { mode?: 'foryou' | 'trending' |
         userLikes = likesRes.data?.map((l: any) => l.status_id) ?? [];
         userSaves = savesRes.data?.map((s: any) => s.status_id) ?? [];
         userFollows = followsRes.data?.map((f: any) => f.following_id) ?? [];
-        if (userSaves.length) setSavedPosts(new Set(userSaves));
+        if (user?.id) {
+          writeSavedPosts(window.localStorage, user.id, userSaves);
+          setSavedPosts(new Set(userSaves));
+        }
       }
 
       return data.map((s: any) => ({
@@ -391,8 +408,10 @@ export function StatusFeed({ mode = 'foryou' }: { mode?: 'foryou' | 'trending' |
       if (!user) throw new Error('Sign in to like posts');
       if (isLiked) {
         await supabase.from('status_likes').delete().eq('status_id', statusId).eq('user_id', user.id);
+        await updateStatusCount(supabase, statusId, 'likes_count', -1);
       } else {
         await supabase.from('status_likes').insert({ status_id: statusId, user_id: user.id });
+        await updateStatusCount(supabase, statusId, 'likes_count', 1);
       }
     },
     onMutate: async ({ statusId, isLiked }) => {
@@ -449,9 +468,14 @@ export function StatusFeed({ mode = 'foryou' }: { mode?: 'foryou' | 'trending' |
         });
       }
     },
-    onError: () => {
-      // table might not exist — fall back to local-only
-      toast({ title: 'Saved locally' });
+    onError: (_error, { statusId, isSaved }) => {
+      setSavedPosts(prev => {
+        const next = new Set(prev);
+        if (isSaved) next.delete(statusId); else next.add(statusId);
+        if (user?.id) writeSavedPosts(window.localStorage, user.id, Array.from(next));
+        return next;
+      });
+      toast({ title: isSaved ? 'Removed locally' : 'Saved locally' });
     },
   });
 
@@ -470,8 +494,7 @@ export function StatusFeed({ mode = 'foryou' }: { mode?: 'foryou' | 'trending' |
 
   const incrementView = async (id: string) => {
     try {
-      const { data } = await supabase.from('user_statuses').select('views_count').eq('id', id).single();
-      await supabase.from('user_statuses').update({ views_count: (data?.views_count ?? 0) + 1 }).eq('id', id);
+      await updateStatusCount(supabase, id, 'views_count', 1);
       void recommendationEventService.recordEvent({
         userId: user?.id ?? null,
         entityType: 'post',
@@ -499,8 +522,12 @@ export function StatusFeed({ mode = 'foryou' }: { mode?: 'foryou' | 'trending' |
         action: 'share',
       });
     }
-    navigator.clipboard.writeText(url);
-    toast({ title: 'Link copied!' });
+    try {
+      await navigator.clipboard.writeText(url);
+      toast({ title: 'Link copied!' });
+    } catch {
+      toast({ title: 'Share link ready', description: url });
+    }
   };
 
   const recentPosts = useMemo(() => {

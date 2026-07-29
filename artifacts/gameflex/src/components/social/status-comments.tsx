@@ -7,6 +7,7 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Lock } from 'lucide-react';
 import { encryptMessage, decryptMessage } from '@/lib/encryption';
 import { useToast } from '@/hooks/use-toast';
+import { updateStatusCount } from '@/lib/social-analytics';
 
 interface StatusCommentsProps {
   statusId: string;
@@ -160,15 +161,24 @@ export function StatusComments({ statusId, commentsCount, open = false }: Status
     mutationFn: async ({ content, replyTarget }: { content: string; replyTarget: Comment | null }) => {
       if (!user) throw new Error('Not authenticated');
 
-      const encryptedContent = await encryptMessage(content);
+      let encryptedContent = content;
+      let isEncrypted = false;
+      try {
+        encryptedContent = await encryptMessage(content);
+        isEncrypted = true;
+      } catch {
+        encryptedContent = content;
+      }
+
       const payloadContent = serializeReplyContent(encryptedContent, replyTarget?.profile?.username);
       const { error } = await supabase.from('status_comments').insert({
         status_id: statusId,
         user_id: user.id,
         content: payloadContent,
-        is_encrypted: true
+        is_encrypted: isEncrypted
       });
       if (error) throw error;
+      await updateStatusCount(supabase, statusId, 'comments_count', 1);
     },
     onSuccess: () => {
       setNewComment('');

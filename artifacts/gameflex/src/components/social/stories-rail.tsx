@@ -14,6 +14,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { motion, AnimatePresence } from 'framer-motion';
 import { resolveStoryGradient, isVideoStory } from '@/features/stories/gradients';
 import { encryptMessage, decryptMessage } from '@/lib/encryption';
+import { updateStatusCount } from '@/lib/social-analytics';
 
 // ─── emoji reactions ──────────────────────────────────────────────────────────
 
@@ -142,23 +143,17 @@ export function StoryViewer({
   useEffect(() => {
     if (!story?.id || viewedRef.current.has(story.id)) return;
     viewedRef.current.add(story.id);
-    // Increment views_count (fire-and-forget, fail silently)
-    supabase
-      .from('user_statuses')
-      .update({ views_count: (story.views_count ?? 0) + 1 })
-      .eq('id', story.id)
-      .then(() => {
-        qc.invalidateQueries({ queryKey: ['my-stories'] });
-        qc.invalidateQueries({ queryKey: ['stories-grid'] });
-        qc.invalidateQueries({ queryKey: ['stories-rail'] });
-        void recommendationEventService.recordEvent({
-          userId: user?.id ?? null,
-          entityType: 'story',
-          entityId: story.id,
-          action: 'story_view',
-        });
-      })
-      .catch(() => {});
+    void updateStatusCount(supabase, story.id, 'views_count', 1).then(() => {
+      qc.invalidateQueries({ queryKey: ['my-stories'] });
+      qc.invalidateQueries({ queryKey: ['stories-grid'] });
+      qc.invalidateQueries({ queryKey: ['stories-rail'] });
+      void recommendationEventService.recordEvent({
+        userId: user?.id ?? null,
+        entityType: 'story',
+        entityId: story.id,
+        action: 'story_view',
+      });
+    }).catch(() => {});
   }, [story?.id]);
 
   // ── real-time subscription for current story's likes + comments ──
@@ -196,10 +191,12 @@ export function StoryViewer({
         const { error } = await supabase.from('status_likes').delete()
           .eq('status_id', story.id).eq('user_id', user.id);
         if (error) throw error;
+        await updateStatusCount(supabase, story.id, 'likes_count', -1);
       } else {
         const { error } = await supabase.from('status_likes')
           .insert({ status_id: story.id, user_id: user.id });
         if (error) throw error;
+        await updateStatusCount(supabase, story.id, 'likes_count', 1);
       }
     },
     onSuccess: () => {
@@ -240,6 +237,7 @@ export function StoryViewer({
       };
       const { error } = await supabase.from('status_comments').insert(insertPayload);
       if (error) throw error;
+      await updateStatusCount(supabase, story.id, 'comments_count', 1);
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['story-comments', story?.id] });
