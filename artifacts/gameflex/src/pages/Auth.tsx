@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from '@/lib/router-compat';
+import { useNavigate, useLocation } from '@/lib/router-compat';
 import { useAuth } from '@/lib/auth-context';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -20,7 +20,15 @@ const Auth = () => {
   
   const { login, register, user } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
   const { toast } = useToast();
+
+  useEffect(() => {
+    const ref = new URLSearchParams(location.search).get('ref')?.trim();
+    if (ref) {
+      localStorage.setItem('gameflex_referral_code', ref);
+    }
+  }, [location.search]);
 
   useEffect(() => {
     if (user) {

@@ -1,6 +1,6 @@
 // @ts-nocheck
-import { useState } from 'react';
-import { Link, useNavigate } from '@/lib/router-compat';
+import { useState, useEffect } from 'react';
+import { Link, useNavigate, useLocation } from '@/lib/router-compat';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
@@ -28,8 +28,16 @@ type RegisterFormData = z.infer<typeof registerSchema>;
 
 export default function Register() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { register } = useAuth();
   const { toast } = useToast();
+
+  useEffect(() => {
+    const ref = new URLSearchParams(location.search).get('ref')?.trim();
+    if (ref) {
+      localStorage.setItem('gameflex_referral_code', ref);
+    }
+  }, [location.search]);
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
 

@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/button';
 import { formatDistanceToNow, subHours } from 'date-fns';
 import {
   Camera, Plus, Layers, Heart, MessageCircle, Clock,
-  Trash2, Pencil, BarChart3, Eye, TrendingUp, Check,
+  Trash2, Pencil, BarChart3, Eye, TrendingUp, Check, Send, AlertCircle,
 } from 'lucide-react';
 import { StoryViewer } from '@/components/social/stories-rail';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -47,6 +47,12 @@ function hoursLeft(createdAt: string) {
   const h = 24 - (Date.now() - new Date(createdAt).getTime()) / 3_600_000;
   return Math.max(0, h);
 }
+
+// NOTE: comments/likes assume two supporting tables that mirror the existing
+// user_stories / user_statuses pattern used elsewhere in this file:
+//   story_comments (id, story_id, user_id, content, created_at)
+//   story_likes    (story_id, user_id)  — unique on (story_id, user_id)
+// If your schema uses different names, update the `.from(...)` calls below.
 
 // ─── Story thumbnail (reused in grid + stats list) ────────────────────────────
 
@@ -94,7 +100,197 @@ function StoryThumb({
   );
 }
 
+// ─── Comments dialog (opened from the My Stories stats rows) ─────────────────
+
+function CommentsDialog({
+  story,
+  open,
+  onOpenChange,
+}: {
+  story: any;
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+}) {
+  const { user } = useAuth();
+  const qc = useQueryClient();
+  const { toast } = useToast();
+  const [text, setText] = useState('');
+
+  const {
+    data: comments = [],
+    isLoading,
+    isError,
+  } = useQuery({
+    queryKey: ['story-comments', story?.id],
+    enabled: !!story && open,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('story_comments')
+        .select('id, story_id, user_id, content, created_at')
+        .eq('story_id', story.id)
+        .order('created_at', { ascending: true });
+
+      // surface the error instead of silently returning [] — an empty list
+      // and a failed fetch look identical to the user otherwise
+      if (error) throw error;
+
+      const ids = [...new Set((data ?? []).map((c: any) => c.user_id))];
+      const { data: profiles } = await supabase
+        .from('profiles')
+        .select('user_id, username, avatar_url')
+        .in('user_id', ids.length ? ids : ['__none__']);
+      const profileMap = new Map(profiles?.map((p: any) => [p.user_id, p]) ?? []);
+
+      return (data ?? []).map((c: any) => ({ ...c, profile: profileMap.get(c.user_id) }));
+    },
+  });
+
+  const postMut = useMutation({
+    mutationFn: async () => {
+      if (!story || !user) throw new Error('Sign in to comment');
+      const trimmed = text.trim();
+      if (!trimmed) throw new Error('Comment is empty');
+
+      const { data, error } = await supabase
+        .from('story_comments')
+        .insert({ story_id: story.id, user_id: user.id, content: trimmed })
+        .select()
+        .single();
+      if (error) throw error;
+
+      const table = story._table ?? 'user_stories';
+      await supabase
+        .from(table)
+        .update({ comments_count: (story.comments_count ?? 0) + 1 })
+        .eq('id', story.id);
+
+      return data;
+    },
+    onSuccess: (inserted) => {
+      setText('');
+      // Show the new comment immediately rather than waiting on a refetch
+      qc.setQueryData(['story-comments', story.id], (old: any[] = []) => [
+        ...old,
+        {
+          ...inserted,
+          profile: {
+            username: user?.user_metadata?.username ?? user?.email?.split('@')[0] ?? 'You',
+            avatar_url: user?.user_metadata?.avatar_url ?? '',
+          },
+        },
+      ]);
+      // Real comment-count sources for the stats section
+      qc.invalidateQueries({ queryKey: ['story-comment-counts'] });
+      qc.invalidateQueries({ queryKey: ['stories-grid'] });
+      qc.invalidateQueries({ queryKey: ['my-stories'] });
+    },
+    onError: (e: any) =>
+      toast({ title: 'Could not post comment', description: e.message, variant: 'destructive' }),
+  });
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-sm flex flex-col max-h-[75vh] p-0 overflow-hidden gap-0">
+        <DialogHeader className="px-5 pt-5 pb-3 border-b border-border/40">
+          <DialogTitle className="text-base">Comments</DialogTitle>
+        </DialogHeader>
+
+        {/* comment list */}
+        <div className="flex-1 overflow-y-auto min-h-[160px] px-5 py-4 space-y-4">
+          {isLoading ? (
+            <div className="space-y-4">
+              {[1, 2, 3].map((i) => (
+                <div key={i} className="flex items-start gap-2.5">
+                  <Skeleton className="h-7 w-7 rounded-full shrink-0" />
+                  <Skeleton className="h-10 flex-1 rounded-2xl" />
+                </div>
+              ))}
+            </div>
+          ) : isError ? (
+            <div className="flex flex-col items-center justify-center py-10 text-center gap-2">
+              <AlertCircle className="h-6 w-6 text-destructive/60" />
+              <p className="text-xs text-muted-foreground max-w-[220px]">
+                Couldn't load comments. The story_comments table may be missing or a permissions
+                policy is blocking reads.
+              </p>
+            </div>
+          ) : comments.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-10 text-center gap-2">
+              <MessageCircle className="h-6 w-6 text-muted-foreground/40" />
+              <p className="text-xs text-muted-foreground">
+                No comments yet — be the first to say something.
+              </p>
+            </div>
+          ) : (
+            comments.map((c: any) => {
+              const isMine = c.user_id === user?.id;
+              return (
+                <div key={c.id} className="flex items-start gap-2.5">
+                  <Avatar className="h-7 w-7 shrink-0 mt-0.5">
+                    <AvatarImage src={c.profile?.avatar_url} className="object-cover" />
+                    <AvatarFallback className="text-[10px] font-bold bg-secondary text-foreground">
+                      {c.profile?.username?.[0]?.toUpperCase() ?? '?'}
+                    </AvatarFallback>
+                  </Avatar>
+                  <div
+                    className={cn(
+                      'min-w-0 flex-1 rounded-2xl px-3.5 py-2.5 border',
+                      isMine
+                        ? 'bg-primary/10 border-primary/20'
+                        : 'bg-secondary/50 border-border/30',
+                    )}
+                  >
+                    <div className="flex items-baseline justify-between gap-2">
+                      <p className="text-xs font-semibold truncate">
+                        {isMine ? 'You' : c.profile?.username ?? 'Unknown'}
+                      </p>
+                      <p className="text-[10px] text-muted-foreground shrink-0">
+                        {formatDistanceToNow(new Date(c.created_at))} ago
+                      </p>
+                    </div>
+                    <p className="text-[13px] text-foreground/90 mt-0.5 break-words leading-snug">
+                      {c.content}
+                    </p>
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+
+        {/* composer */}
+        <div className="flex items-center gap-2 px-4 py-3 border-t border-border/40 bg-card/60">
+          <input
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey && text.trim() && !postMut.isPending) {
+                e.preventDefault();
+                postMut.mutate();
+              }
+            }}
+            maxLength={280}
+            placeholder={user ? 'Write a comment…' : 'Sign in to comment'}
+            disabled={!user}
+            className="flex-1 rounded-full bg-secondary/50 border border-border/50 text-xs px-4 py-2.5 focus:outline-none focus:ring-1 focus:ring-primary placeholder:text-muted-foreground disabled:opacity-50"
+          />
+          <Button
+            size="icon"
+            className="h-9 w-9 rounded-full shrink-0"
+            disabled={!user || !text.trim() || postMut.isPending}
+            onClick={() => postMut.mutate()}
+          >
+            <Send className="h-3.5 w-3.5" />
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // ─── Community story card ─────────────────────────────────────────────────────
+// Kept clean — no like/comment actions here. Those live in the My Stories
+// stats rows below, where they now reflect real fetched comment counts.
 
 function CommunityCard({
   group,
@@ -106,7 +302,6 @@ function CommunityCard({
   onClick: () => void;
 }) {
   const latest = group.stories[group.stories.length - 1];
-  const totalLikes = group.stories.reduce((s: number, x: any) => s + (x.likes_count ?? 0), 0);
 
   return (
     <motion.button
@@ -115,7 +310,7 @@ function CommunityCard({
       transition={{ duration: 0.18, delay: index * 0.04 }}
       type="button"
       onClick={onClick}
-      className="flex flex-col text-left group cursor-pointer"
+      className="flex flex-col text-left group cursor-pointer w-full"
     >
       <div className="relative aspect-[9/16] rounded-2xl overflow-hidden mb-2.5 bg-secondary border border-border/40 group-hover:border-primary/60 transition-all duration-200 shadow-md group-hover:shadow-primary/10 group-hover:shadow-lg">
         <StoryThumb story={latest} index={index} />
@@ -128,14 +323,6 @@ function CommunityCard({
           <div className="absolute top-2.5 right-2.5 bg-black/60 backdrop-blur-sm px-2 py-0.5 rounded-full text-[10px] font-bold text-white flex items-center gap-1 border border-white/10">
             <Layers className="h-3 w-3" />
             {group.stories.length}
-          </div>
-        )}
-
-        {/* likes badge */}
-        {totalLikes > 0 && (
-          <div className="absolute top-2.5 left-2.5 bg-black/60 backdrop-blur-sm px-2 py-0.5 rounded-full text-[10px] font-bold text-white flex items-center gap-1 border border-white/10">
-            <Heart className="h-3 w-3 fill-rose-400 text-rose-400" />
-            {totalLikes}
           </div>
         )}
 
@@ -173,19 +360,26 @@ function CommunityCard({
 function MyStoryRow({
   story,
   index,
+  liked,
+  commentsCount,
   onDelete,
   onEdit,
   onView,
+  onLike,
+  onComment,
 }: {
   story: any;
   index: number;
+  liked?: boolean;
+  commentsCount: number;
   onDelete: (s: any) => void;
   onEdit: (s: any) => void;
   onView: () => void;
+  onLike: (s: any) => void;
+  onComment: (s: any) => void;
 }) {
   const isText = !story.media_url;
   const likes = story.likes_count ?? 0;
-  const comments = story.comments_count ?? 0;
   const remaining = hoursLeft(story.created_at);
   const pct = (remaining / 24) * 100;
 
@@ -221,16 +415,27 @@ function MyStoryRow({
             : 'Photo story'}
         </p>
 
-        {/* stats pills */}
+        {/* stats pills — heart + comment are interactive, comment count is live */}
         <div className="flex items-center flex-wrap gap-2">
-          <span className="flex items-center gap-1 text-[11px] bg-rose-500/10 text-rose-400 font-semibold rounded-full px-2 py-0.5 border border-rose-500/15">
-            <Heart className="h-3 w-3" />
+          <button
+            onClick={() => onLike(story)}
+            className={cn(
+              'flex items-center gap-1 text-[11px] font-semibold rounded-full px-2 py-0.5 border transition-colors',
+              liked
+                ? 'bg-rose-500/20 text-rose-400 border-rose-500/30'
+                : 'bg-rose-500/10 text-rose-400 border-rose-500/15 hover:bg-rose-500/15',
+            )}
+          >
+            <Heart className={cn('h-3 w-3', liked && 'fill-rose-400')} />
             {likes.toLocaleString()}
-          </span>
-          <span className="flex items-center gap-1 text-[11px] bg-blue-500/10 text-blue-400 font-semibold rounded-full px-2 py-0.5 border border-blue-500/15">
+          </button>
+          <button
+            onClick={() => onComment(story)}
+            className="flex items-center gap-1 text-[11px] bg-blue-500/10 text-blue-400 font-semibold rounded-full px-2 py-0.5 border border-blue-500/15 hover:bg-blue-500/15 transition-colors"
+          >
             <MessageCircle className="h-3 w-3" />
-            {comments.toLocaleString()}
-          </span>
+            {commentsCount.toLocaleString()}
+          </button>
           <span className="flex items-center gap-1 text-[11px] bg-amber-500/10 text-amber-400 font-semibold rounded-full px-2 py-0.5 border border-amber-500/15">
             <Clock className="h-3 w-3" />
             {remaining < 1 ? '<1h' : `${Math.round(remaining)}h`}
@@ -406,6 +611,7 @@ export default function Stories() {
   const [myViewerOpenComments, setMyViewerOpenComments] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<any>(null);
   const [editTarget, setEditTarget] = useState<any>(null);
+  const [commentTarget, setCommentTarget] = useState<any>(null);
 
   // ── community stories ──
   const { data: userGroups = [], isLoading: communityLoading } = useQuery({
@@ -413,13 +619,16 @@ export default function Stories() {
     staleTime: 60_000,
     queryFn: async () => {
       try {
-          const { items } = await recommendationService.fetchRecommendations('stories', user?.id, 36);
-          const data = (items || []).map((item: any) => item.payload).filter(Boolean);
-          // If recommendations are empty, fall back to DB query below
-          if (!data.length) {
-            throw new Error('no-recommendations');
-          }
-          const ids = [...new Set(data.map((s: any) => s.user_id))];
+        const { items } = await recommendationService.fetchRecommendations('stories', user?.id, 36);
+        const data = (items || [])
+          .map((item: any) => item.payload)
+          .filter(Boolean)
+          .map((s: any) => ({ ...s, _table: s._table ?? 'user_stories' }));
+        // If recommendations are empty, fall back to DB query below
+        if (!data.length) {
+          throw new Error('no-recommendations');
+        }
+        const ids = [...new Set(data.map((s: any) => s.user_id))];
         const { data: profiles } = await supabase
           .from('profiles')
           .select('user_id, username, avatar_url')
@@ -447,23 +656,25 @@ export default function Stories() {
       } catch (err) {
         // if recommendations failed or returned empty, fetch recent stories from DB
         const cutoff = subHours(new Date(), 24).toISOString();
-        // Try user_stories first, fallback to user_statuses
-        let data = null;
-        try {
-          const res = await supabase
-            .from('user_stories')
-            .select('*')
-            .gte('created_at', cutoff)
-            .order('created_at', { ascending: true });
-          data = res.data;
-        } catch {
-          const res = await supabase
+        // Try user_stories first, fallback to user_statuses when the table is missing or empty.
+        const primary = await supabase
+          .from('user_stories')
+          .select('*')
+          .gte('created_at', cutoff)
+          .order('created_at', { ascending: true });
+        let data = primary.data ?? [];
+        let table = 'user_stories';
+        if (primary.error || !data.length) {
+          const fallback = await supabase
             .from('user_statuses')
             .select('*')
             .gte('created_at', cutoff)
             .order('created_at', { ascending: true });
-          data = res.data;
+          if (fallback.error) throw fallback.error;
+          data = fallback.data ?? [];
+          table = 'user_statuses';
         }
+        data = data.map((s: any) => ({ ...s, _table: table }));
 
         if (!data?.length) return [];
 
@@ -504,28 +715,77 @@ export default function Stories() {
     queryFn: async () => {
       if (!user) return [];
       const cutoff = subHours(new Date(), 24).toISOString();
-      // Prefer user_stories for personal stories
-      try {
-        const { data: d, error } = await supabase
-          .from('user_stories')
-          .select('id, user_id, content, media_url, media_type, created_at, likes_count, comments_count, views_count')
-          .eq('user_id', user.id)
-          .gte('created_at', cutoff)
-          .order('created_at', { ascending: false });
-        if (error) throw error;
-        return d ?? [];
-      } catch {
-        const { data: d2, error: err2 } = await supabase
+      const primary = await supabase
+        .from('user_stories')
+        .select('id, user_id, content, media_url, media_type, created_at, likes_count, comments_count, views_count')
+        .eq('user_id', user.id)
+        .gte('created_at', cutoff)
+        .order('created_at', { ascending: false });
+      const primaryStories = primary.data ?? [];
+      if (primary.error || !primaryStories.length) {
+        const fallback = await supabase
           .from('user_statuses')
           .select('id, user_id, content, media_url, media_type, created_at, likes_count, comments_count, views_count')
           .eq('user_id', user.id)
           .gte('created_at', cutoff)
           .order('created_at', { ascending: false });
-        if (err2) throw err2;
-        return d2 ?? [];
+        if (fallback.error) throw fallback.error;
+        return (fallback.data ?? []).map((s: any) => ({ ...s, _table: 'user_statuses' }));
       }
+      return primaryStories.map((s: any) => ({ ...s, _table: 'user_stories' }));
     },
   });
+
+  // ── real comment counts for my stories (fetched from story_comments, not
+  // the possibly-stale comments_count column) ──
+  const myStoryIds = useMemo(() => myStories.map((s: any) => s.id), [myStories]);
+
+  const { data: commentCountRows = [] } = useQuery({
+    queryKey: ['story-comment-counts', myStoryIds.join(',')],
+    enabled: myStoryIds.length > 0,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('story_comments')
+        .select('story_id')
+        .in('story_id', myStoryIds);
+      if (error || !data) return [];
+      return data;
+    },
+  });
+
+  const commentCountMap = useMemo(() => {
+    const map = new Map<string, number>();
+    commentCountRows.forEach((r: any) => {
+      map.set(r.story_id, (map.get(r.story_id) ?? 0) + 1);
+    });
+    return map;
+  }, [commentCountRows]);
+
+  const getCommentsCount = (story: any) =>
+    commentCountMap.has(story.id) ? commentCountMap.get(story.id)! : (story.comments_count ?? 0);
+
+  // ── liked story ids (for current user) ──
+  const allVisibleIds = useMemo(() => {
+    const ids = new Set<string>();
+    userGroups.forEach((g: any) => g.stories.forEach((s: any) => ids.add(s.id)));
+    myStories.forEach((s: any) => ids.add(s.id));
+    return Array.from(ids);
+  }, [userGroups, myStories]);
+
+  const { data: likedIds = [] } = useQuery({
+    queryKey: ['story-likes', user?.id, allVisibleIds.join(',')],
+    enabled: !!user && allVisibleIds.length > 0,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('story_likes')
+        .select('story_id')
+        .eq('user_id', user!.id)
+        .in('story_id', allVisibleIds);
+      if (error || !data) return [];
+      return data.map((d: any) => d.story_id);
+    },
+  });
+  const likedSet = useMemo(() => new Set(likedIds), [likedIds]);
 
   // viewer groups for my stories
   const myGroups = useMemo(() => {
@@ -540,9 +800,9 @@ export default function Stories() {
     }];
   }, [user, myStories]);
 
-  // aggregate stats
+  // aggregate stats — comments now come from the live count map
   const totalLikes = myStories.reduce((s: number, x: any) => s + (x.likes_count ?? 0), 0);
-  const totalComments = myStories.reduce((s: number, x: any) => s + (x.comments_count ?? 0), 0);
+  const totalComments = myStories.reduce((s: number, x: any) => s + getCommentsCount(x), 0);
   const totalViews = myStories.reduce((s: number, x: any) => s + (x.views_count ?? 0), 0);
 
   // ── delete ──
@@ -566,6 +826,48 @@ export default function Stories() {
     },
     onError: (e: any) => toast({ title: 'Error', description: e.message, variant: 'destructive' }),
   });
+
+  // ── like / unlike (My Stories only) ──
+  const likeMut = useMutation({
+    mutationFn: async (story: any) => {
+      if (!user) throw new Error('Sign in to like stories');
+      const table = story._table ?? 'user_stories';
+      const alreadyLiked = likedSet.has(story.id);
+
+      if (alreadyLiked) {
+        await supabase.from('story_likes').delete().eq('story_id', story.id).eq('user_id', user.id);
+        await supabase
+          .from(table)
+          .update({ likes_count: Math.max(0, (story.likes_count ?? 0) - 1) })
+          .eq('id', story.id);
+      } else {
+        await supabase.from('story_likes').insert({ story_id: story.id, user_id: user.id });
+        await supabase
+          .from(table)
+          .update({ likes_count: (story.likes_count ?? 0) + 1 })
+          .eq('id', story.id);
+      }
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['stories-grid'] });
+      qc.invalidateQueries({ queryKey: ['my-stories'] });
+      qc.invalidateQueries({ queryKey: ['story-likes'] });
+    },
+    onError: (e: any) => toast({ title: 'Error', description: e.message, variant: 'destructive' }),
+  });
+
+  const handleLike = (story: any) => {
+    if (!user) {
+      toast({ title: 'Sign in to like stories' });
+      return;
+    }
+    likeMut.mutate(story);
+  };
+
+  // featured (first two) vs the rest — kept mutually exclusive to avoid rendering
+  // the same story cards twice on the page
+  const featuredGroups = userGroups.slice(0, 2);
+  const remainingGroups = userGroups.slice(2);
 
   return (
     <SocialLayout
@@ -617,31 +919,37 @@ export default function Stories() {
             </div>
           ) : (
             <div className="space-y-6">
-              {/* Featured large cards */}
-              <div className="flex items-start justify-center gap-6">
-                {userGroups.slice(0, 2).map((g, idx) => (
-                  <div key={g.user_id} className="w-[220px] md:w-[260px] lg:w-[300px]">
-                    <CommunityCard
-                      group={g}
-                      index={idx}
-                      size="large"
-                      onClick={() => { setViewingIdx(idx); setShowViewer(true); }}
-                    />
-                  </div>
-                ))}
-              </div>
+              {/* Featured large cards (first two), left-aligned to match design */}
+              {featuredGroups.length > 0 && (
+                <div className="flex items-start justify-start gap-6 flex-wrap">
+                  {featuredGroups.map((g, idx) => (
+                    <div key={g.user_id} className="w-[210px] md:w-[230px] lg:w-[250px]">
+                      <CommunityCard
+                        group={g}
+                        index={idx}
+                        onClick={() => { setViewingIdx(idx); setShowViewer(true); }}
+                      />
+                    </div>
+                  ))}
+                </div>
+              )}
 
-              {/* Remaining grid */}
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
-                {userGroups.map((g, idx) => (
-                  <CommunityCard
-                    key={g.user_id}
-                    group={g}
-                    index={idx}
-                    onClick={() => { setViewingIdx(idx); setShowViewer(true); }}
-                  />
-                ))}
-              </div>
+              {/* Remaining grid — excludes the two featured above so nothing repeats */}
+              {remainingGroups.length > 0 && (
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+                  {remainingGroups.map((g, idx) => (
+                    <CommunityCard
+                      key={g.user_id}
+                      group={g}
+                      index={idx + featuredGroups.length}
+                      onClick={() => {
+                        setViewingIdx(idx + featuredGroups.length);
+                        setShowViewer(true);
+                      }}
+                    />
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </section>
@@ -717,16 +1025,15 @@ export default function Stories() {
                       key={story.id}
                       story={story}
                       index={idx}
+                      liked={likedSet.has(story.id)}
+                      commentsCount={getCommentsCount(story)}
                       onDelete={setDeleteTarget}
                       onEdit={setEditTarget}
+                      onLike={handleLike}
+                      onComment={setCommentTarget}
                       onView={() => {
                         setMyViewerStartIndex(myStories.length - 1 - idx);
                         setMyViewerOpenComments(false);
-                        setMyViewerOpen(true);
-                      }}
-                      onComment={() => {
-                        setMyViewerStartIndex(myStories.length - 1 - idx);
-                        setMyViewerOpenComments(true);
                         setMyViewerOpen(true);
                       }}
                     />
@@ -804,6 +1111,13 @@ export default function Stories() {
         story={editTarget}
         open={!!editTarget}
         onOpenChange={(v) => !v && setEditTarget(null)}
+      />
+
+      {/* ── comments dialog ── */}
+      <CommentsDialog
+        story={commentTarget}
+        open={!!commentTarget}
+        onOpenChange={(v) => !v && setCommentTarget(null)}
       />
     </SocialLayout>
   );

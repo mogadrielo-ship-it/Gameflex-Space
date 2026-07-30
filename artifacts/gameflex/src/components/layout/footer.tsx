@@ -33,7 +33,7 @@ const socialLinks = [
 ];
 
 export function Footer() {
-  const { deferredPrompt, promptInstall, isInstalled, isIos, hideInstallLink } = usePWA();
+  const { deferredPrompt, promptInstall, isInstalled, isIos, hideInstallLink, hasInstallPrompt } = usePWA();
   const [showIosGuide, setShowIosGuide] = useState(false);
   const [showInstallHelp, setShowInstallHelp] = useState(false);
   const [showInstallModal, setShowInstallModal] = useState(false);
@@ -44,7 +44,12 @@ export function Footer() {
       setShowIosGuide(true);
       return;
     }
-    // Open the branded install modal; it will auto-prompt if possible
+
+    if (!hasInstallPrompt && !(window as any).__GAMEFLEX_DEFERRED_PROMPT) {
+      setShowInstallHelp(true);
+      return;
+    }
+
     setShowInstallModal(true);
   };
 

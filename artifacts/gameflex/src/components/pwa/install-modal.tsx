@@ -10,7 +10,8 @@ export function InstallModal({ open, onOpenChange }: { open: boolean; onOpenChan
 
   useEffect(() => {
     // auto-prompt when modal opens and a deferred prompt exists
-    if (open && (deferredPrompt || (window as any).__GAMEFLEX_DEFERRED_PROMPT)) {
+    const promptAvailable = deferredPrompt || (window as any).__GAMEFLEX_DEFERRED_PROMPT;
+    if (open && promptAvailable) {
       (async () => {
         const res = await promptInstall();
         if (res?.outcome === 'accepted') {
@@ -21,9 +22,11 @@ export function InstallModal({ open, onOpenChange }: { open: boolean; onOpenChan
         }
       })();
     }
-  }, [open]);
+  }, [open, deferredPrompt, promptInstall, hideInstallLink, navigate, onOpenChange]);
 
   if (!open) return null;
+
+  const promptAvailable = !!deferredPrompt || !!(window as any).__GAMEFLEX_DEFERRED_PROMPT;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
@@ -38,11 +41,19 @@ export function InstallModal({ open, onOpenChange }: { open: boolean; onOpenChan
           </div>
         </div>
 
+        <div className="mt-4">
+          {!isIos && !promptAvailable && (
+            <p className="text-sm text-muted-foreground">
+              Your browser doesn't support the direct install prompt. Use the browser menu and choose "Install" or "Add to Home Screen".
+            </p>
+          )}
+        </div>
+
         <div className="mt-6 flex items-center justify-end gap-3">
           <Button variant="ghost" onClick={() => onOpenChange(false)}>Close</Button>
           {isIos ? (
-            <Button onClick={() => { /* show iOS guidance handled elsewhere */ onOpenChange(false); }}>Show iOS Guide</Button>
-          ) : (
+            <Button onClick={() => { onOpenChange(false); }}>Show iOS Guide</Button>
+          ) : promptAvailable ? (
             <Button onClick={async () => {
               const res = await promptInstall();
               if (res?.outcome === 'accepted') {
@@ -52,6 +63,10 @@ export function InstallModal({ open, onOpenChange }: { open: boolean; onOpenChan
               }
             }}>
               Install
+            </Button>
+          ) : (
+            <Button onClick={() => onOpenChange(false)}>
+              Got it
             </Button>
           )}
         </div>

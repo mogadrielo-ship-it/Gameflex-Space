@@ -34,7 +34,9 @@ export function ReferralCard() {
   });
 
   const referralCode = profile?.referral_code || 'Loading...';
-  const referralLink = `${window.location.origin}/register?ref=${referralCode}`;
+  const referralLink = typeof window !== 'undefined'
+    ? `${window.location.origin}/register?ref=${referralCode}`
+    : `/register?ref=${referralCode}`;
 
   const copyToClipboard = async (text: string) => {
     await navigator.clipboard.writeText(text);

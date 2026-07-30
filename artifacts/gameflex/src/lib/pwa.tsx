@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 
 export function usePWA() {
   const [deferredPrompt, setDeferredPrompt] = useState(null as any);
+  const [hasInstallPrompt, setHasInstallPrompt] = useState(false);
   const [isInstalled, setIsInstalled] = useState(false);
   const [isIos, setIsIos] = useState(false);
 
@@ -10,6 +11,7 @@ export function usePWA() {
       e.preventDefault();
       // store locally and on window so other components/pages can access it
       setDeferredPrompt(e);
+      setHasInstallPrompt(true);
       try {
         (window as any).__GAMEFLEX_DEFERRED_PROMPT = e;
       } catch (e) {}
@@ -67,5 +69,5 @@ export function usePWA() {
     setIsInstalled(true);
   }, []);
 
-  return { deferredPrompt, promptInstall, isInstalled, isIos, hideInstallLink } as const;
+  return { deferredPrompt, promptInstall, isInstalled, isIos, hideInstallLink, hasInstallPrompt } as const;
 }
