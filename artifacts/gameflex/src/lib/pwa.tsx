@@ -8,7 +8,11 @@ export function usePWA() {
   useEffect(() => {
     const handler = (e: any) => {
       e.preventDefault();
+      // store locally and on window so other components/pages can access it
       setDeferredPrompt(e);
+      try {
+        (window as any).__GAMEFLEX_DEFERRED_PROMPT = e;
+      } catch (e) {}
     };
     window.addEventListener('beforeinstallprompt', handler as any);
 
@@ -22,6 +26,8 @@ export function usePWA() {
 
     // detect standalone for iOS/Android
     const checkStandalone = () => {
+      const ls = (() => { try { return localStorage.getItem('gameflex_installed'); } catch (e) { return null; } })();
+      if (ls) { setIsInstalled(true); return; }
       const standalone = (window.navigator as any).standalone || window.matchMedia('(display-mode: standalone)').matches;
       setIsInstalled(!!standalone);
     };
@@ -37,17 +43,29 @@ export function usePWA() {
   }, []);
 
   const promptInstall = useCallback(async () => {
-    if (!deferredPrompt) return null;
+    const prompt = deferredPrompt ?? (window as any).__GAMEFLEX_DEFERRED_PROMPT;
+    if (!prompt) return null;
     try {
-      await deferredPrompt.prompt();
-      const choice = await deferredPrompt.userChoice;
+      await prompt.prompt();
+      const choice = await prompt.userChoice;
       setDeferredPrompt(null);
+      try { (window as any).__GAMEFLEX_DEFERRED_PROMPT = null; } catch (e) {}
+      if (choice?.outcome === 'accepted') {
+        try { localStorage.setItem('gameflex_installed', '1'); } catch (e) {}
+        setIsInstalled(true);
+      }
       return choice;
     } catch (e) {
       setDeferredPrompt(null);
+      try { (window as any).__GAMEFLEX_DEFERRED_PROMPT = null; } catch (e) {}
       return null;
     }
   }, [deferredPrompt]);
 
-  return { deferredPrompt, promptInstall, isInstalled, isIos } as const;
+  const hideInstallLink = useCallback(() => {
+    try { localStorage.setItem('gameflex_installed', '1'); } catch (e) {}
+    setIsInstalled(true);
+  }, []);
+
+  return { deferredPrompt, promptInstall, isInstalled, isIos, hideInstallLink } as const;
 }

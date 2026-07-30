@@ -300,9 +300,11 @@ export default function Dashboard() {
           <ReferralCard />
 
           {/* Activity Feed */}
-          <div className="rounded-xl bg-card border border-border/50 p-6">
+          <div className="rounded-xl bg-card border border-border/50 p-6 flex flex-col">
             <h3 className="font-display font-bold mb-4">Live Activity</h3>
-            <ActivityFeed />
+            <div className="flex-1 min-h-0">
+              <ActivityFeed />
+            </div>
           </div>
         </div>
       </div>

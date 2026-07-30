@@ -5,7 +5,6 @@ import { Link } from '@/lib/router-compat';
 import { supabase } from '@/integrations/supabase/client';
 import { SocialLayout } from '@/components/social/social-nav';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
-import { recommendationService } from '@/services/recommendations/RecommendationService';
 import { Button } from '@/components/ui/button';
 import { formatDistanceToNow, subHours } from 'date-fns';
 import {
@@ -108,7 +107,6 @@ function CommunityCard({
 }) {
   const latest = group.stories[group.stories.length - 1];
   const totalLikes = group.stories.reduce((s: number, x: any) => s + (x.likes_count ?? 0), 0);
-  const totalViews = group.stories.reduce((s: number, x: any) => s + (x.views_count ?? 0), 0);
 
   return (
     <motion.button
@@ -133,21 +131,13 @@ function CommunityCard({
           </div>
         )}
 
-        {/* engagement badges */}
-        <div className="absolute top-2.5 left-2.5 flex flex-wrap gap-1.5">
-          {totalLikes > 0 && (
-            <div className="bg-black/60 backdrop-blur-sm px-2 py-0.5 rounded-full text-[10px] font-bold text-white flex items-center gap-1 border border-white/10">
-              <Heart className="h-3 w-3 fill-rose-400 text-rose-400" />
-              {totalLikes}
-            </div>
-          )}
-          {totalViews > 0 && (
-            <div className="bg-black/60 backdrop-blur-sm px-2 py-0.5 rounded-full text-[10px] font-bold text-white flex items-center gap-1 border border-white/10">
-              <Eye className="h-3 w-3" />
-              {totalViews}
-            </div>
-          )}
-        </div>
+        {/* likes badge */}
+        {totalLikes > 0 && (
+          <div className="absolute top-2.5 left-2.5 bg-black/60 backdrop-blur-sm px-2 py-0.5 rounded-full text-[10px] font-bold text-white flex items-center gap-1 border border-white/10">
+            <Heart className="h-3 w-3 fill-rose-400 text-rose-400" />
+            {totalLikes}
+          </div>
+        )}
 
         {/* user info */}
         <div className="absolute bottom-0 left-0 right-0 p-3 flex items-end gap-2">
@@ -196,7 +186,6 @@ function MyStoryRow({
   const isText = !story.media_url;
   const likes = story.likes_count ?? 0;
   const comments = story.comments_count ?? 0;
-  const views = story.views_count ?? 0;
   const remaining = hoursLeft(story.created_at);
   const pct = (remaining / 24) * 100;
 
@@ -241,10 +230,6 @@ function MyStoryRow({
           <span className="flex items-center gap-1 text-[11px] bg-blue-500/10 text-blue-400 font-semibold rounded-full px-2 py-0.5 border border-blue-500/15">
             <MessageCircle className="h-3 w-3" />
             {comments.toLocaleString()}
-          </span>
-          <span className="flex items-center gap-1 text-[11px] bg-emerald-500/10 text-emerald-400 font-semibold rounded-full px-2 py-0.5 border border-emerald-500/15">
-            <Eye className="h-3 w-3" />
-            {views.toLocaleString()}
           </span>
           <span className="flex items-center gap-1 text-[11px] bg-amber-500/10 text-amber-400 font-semibold rounded-full px-2 py-0.5 border border-amber-500/15">
             <Clock className="h-3 w-3" />
@@ -631,15 +616,32 @@ export default function Stories() {
               </div>
             </div>
           ) : (
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
-              {userGroups.map((g, idx) => (
-                <CommunityCard
-                  key={g.user_id}
-                  group={g}
-                  index={idx}
-                  onClick={() => { setViewingIdx(idx); setShowViewer(true); }}
-                />
-              ))}
+            <div className="space-y-6">
+              {/* Featured large cards */}
+              <div className="flex items-start justify-center gap-6">
+                {userGroups.slice(0, 2).map((g, idx) => (
+                  <div key={g.user_id} className="w-[220px] md:w-[260px] lg:w-[300px]">
+                    <CommunityCard
+                      group={g}
+                      index={idx}
+                      size="large"
+                      onClick={() => { setViewingIdx(idx); setShowViewer(true); }}
+                    />
+                  </div>
+                ))}
+              </div>
+
+              {/* Remaining grid */}
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+                {userGroups.map((g, idx) => (
+                  <CommunityCard
+                    key={g.user_id}
+                    group={g}
+                    index={idx}
+                    onClick={() => { setViewingIdx(idx); setShowViewer(true); }}
+                  />
+                ))}
+              </div>
             </div>
           )}
         </section>

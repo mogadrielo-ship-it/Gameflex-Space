@@ -2,6 +2,7 @@ import { Link } from '@/lib/router-compat';
 import { Trophy, Twitter, Instagram, Youtube, MessageCircle, Mail, Phone } from 'lucide-react';
 import { useState } from 'react';
 import { usePWA } from '@/lib/pwa';
+import { InstallModal } from '@/components/pwa/install-modal';
 
 const footerLinks = {
   platform: [
@@ -32,9 +33,10 @@ const socialLinks = [
 ];
 
 export function Footer() {
-  const { deferredPrompt, promptInstall, isInstalled, isIos } = usePWA();
+  const { deferredPrompt, promptInstall, isInstalled, isIos, hideInstallLink } = usePWA();
   const [showIosGuide, setShowIosGuide] = useState(false);
   const [showInstallHelp, setShowInstallHelp] = useState(false);
+  const [showInstallModal, setShowInstallModal] = useState(false);
 
   const handleInstallClick = async (e: React.MouseEvent) => {
     e.preventDefault();
@@ -42,12 +44,8 @@ export function Footer() {
       setShowIosGuide(true);
       return;
     }
-    if (deferredPrompt) {
-      await promptInstall();
-      return;
-    }
-    // No native prompt available — show short instructions
-    setShowInstallHelp(true);
+    // Open the branded install modal; it will auto-prompt if possible
+    setShowInstallModal(true);
   };
 
   return (
@@ -167,6 +165,11 @@ export function Footer() {
               </div>
             </div>
           </div>
+        )}
+
+        {/* branded install modal */}
+        {showInstallModal && (
+          <InstallModal open={showInstallModal} onOpenChange={setShowInstallModal} />
         )}
 
         {/* Contact Info */}

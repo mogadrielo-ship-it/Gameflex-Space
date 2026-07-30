@@ -91,21 +91,20 @@ export function ActivityFeed() {
   }
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-3 max-h-[360px] md:max-h-[420px] lg:max-h-[520px] overflow-y-auto scrollbar-hide pr-1">
       {activities.map((activity) => {
         const IconComponent = activityIcons[activity.activity_type] || Bell;
         const colorClass = activityColors[activity.activity_type] || activityColors.system;
-        
         return (
           <div
             key={activity.id}
-            className="flex items-start gap-3 p-3 rounded-lg bg-secondary/50 hover:bg-secondary transition-colors animate-fade-in"
+            className="flex items-start gap-3 p-3 rounded-lg bg-secondary/50 hover:bg-secondary transition-colors animate-fade-in min-h-0"
           >
             <div className={`h-10 w-10 rounded-full flex items-center justify-center flex-shrink-0 ${colorClass}`}>
               <IconComponent className="h-5 w-5" />
             </div>
             <div className="flex-1 min-w-0">
-              <p className="font-medium text-sm">{activity.title}</p>
+              <p className="font-medium text-sm truncate">{activity.title}</p>
               {activity.description && (
                 <p className="text-xs text-muted-foreground truncate">{activity.description}</p>
               )}
